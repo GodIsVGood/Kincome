@@ -14,6 +14,7 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f5f4f0; }
@@ -92,6 +93,10 @@ function App() {
   const [newCat, setNewCat] = useState('');
   const [connError, setConnError] = useState(false);
   const feedEndRef = useRef(null);
+  const monthlyChartRef = useRef(null);
+  const categoryChartRef = useRef(null);
+  const monthlyChartInstance = useRef(null);
+  const categoryChartInstance = useRef(null);
 
   useEffect(() => {
     const unsubTx = db.collection('transactions').orderBy('ts', 'asc').onSnapshot(
@@ -154,6 +159,63 @@ function App() {
     return map;
   }, [monthTx]);
 
+  const lastSixMonths = useMemo(() => {
+    const months = [];
+    const d = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const dt = new Date(d.getFullYear(), d.getMonth() - i, 1);
+      months.push(dt.toISOString().slice(0, 7));
+    }
+    return months.map(m => {
+      const tx = transactions.filter(t => t.date.slice(0,7) === m);
+      const income = tx.filter(t => t.type === 'income').reduce((s,t) => s + t.amount, 0);
+      const expense = tx.filter(t => t.type === 'expense').reduce((s,t) => s + t.amount, 0);
+      return { month: m, income, expense };
+    });
+  }, [transactions]);
+
+  const spendByPerson = useMemo(() => {
+    const map = {};
+    monthTx.filter(t => t.type === 'expense').forEach(t => { map[t.author] = (map[t.author] || 0) + t.amount; });
+    return map;
+  }, [monthTx]);
+
+  useEffect(() => {
+    if (tab !== 'analysis' || !window.Chart) return;
+    if (monthlyChartInstance.current) monthlyChartInstance.current.destroy();
+    if (categoryChartInstance.current) categoryChartInstance.current.destroy();
+
+    if (monthlyChartRef.current) {
+      monthlyChartInstance.current = new Chart(monthlyChartRef.current, {
+        type: 'bar',
+        data: {
+          labels: lastSixMonths.map(m => m.month.slice(5) + '/' + m.month.slice(2,4)),
+          datasets: [
+            { label: 'הכנסות', data: lastSixMonths.map(m => m.income), backgroundColor: '#0B6E4F' },
+            { label: 'הוצאות', data: lastSixMonths.map(m => m.expense), backgroundColor: '#C1440E' },
+          ],
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom', rtl: true, labels: { font: { family: 'Segoe UI' } } } }, scales: { x: { reverse: true } } },
+      });
+    }
+    if (categoryChartRef.current) {
+      const labels = Object.keys(spentByCategory);
+      const values = Object.values(spentByCategory);
+      categoryChartInstance.current = new Chart(categoryChartRef.current, {
+        type: 'doughnut',
+        data: {
+          labels,
+          datasets: [{ data: values, backgroundColor: ['#1C2541','#0B6E4F','#C1440E','#C08A00','#5B6470','#8A6DAB','#3A7CA5'] }],
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom', rtl: true, labels: { font: { family: 'Segoe UI' } } } } },
+      });
+    }
+    return () => {
+      if (monthlyChartInstance.current) monthlyChartInstance.current.destroy();
+      if (categoryChartInstance.current) categoryChartInstance.current.destroy();
+    };
+  }, [tab, lastSixMonths, spentByCategory]);
+
   if (!displayName) {
     return (
       <div dir="rtl" style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f4f0', padding:'0 24px', boxSizing:'border-box'}}>
@@ -185,7 +247,7 @@ function App() {
           </div>
         </div>
         <nav style={{maxWidth:640, margin:'0 auto', padding:'0 16px', display:'flex', gap:4}}>
-          {[['feed','יומן'],['budget','תקציב']].map(([key,label]) => (
+          {[['feed','יומן'],['budget','תקציב'],['analysis','ניתוח']].map(([key,label]) => (
             <button key={key} onClick={() => setTab(key)} style={{
               padding:'8px 12px', fontSize:14, fontWeight:500, background:'none', border:'none', borderBottom: tab===key ? '2px solid #1C2541' : '2px solid transparent',
               color: tab===key ? '#1C2541' : '#78716c', cursor:'pointer'
@@ -281,6 +343,35 @@ function App() {
             <label style={{fontSize:14, color:'#78716c'}}>חודש לצפייה</label>
             <input type="month" value={month} onChange={e => setMonth(e.target.value)}
               className="mono" style={{display:'block', marginTop:4, border:'1px solid #d6d3d1', borderRadius:6, padding:'4px 8px', fontSize:14}} />
+          </div>
+        </div>
+      )}
+
+      {tab === 'analysis' && (
+        <div style={{flex:1, overflowY:'auto', maxWidth:640, margin:'0 auto', width:'100%', padding:'16px', boxSizing:'border-box'}}>
+          <div style={{display:'flex', justifyContent:'space-between', gap:16, marginBottom:16}}>
+            <div style={{background:'#fff', border:'1px solid #e7e5e4', borderRadius:6, padding:'10px 14px', flex:1, textAlign:'center'}}>
+              <div style={{fontSize:11, color:'#a8a29e'}}>{displayName} הוציא/ה החודש</div>
+              <div className="mono" style={{fontWeight:700, color:'#C1440E'}}>₪{fmt(spendByPerson[displayName] || 0)}</div>
+            </div>
+            {Object.keys(spendByPerson).filter(p => p !== displayName).map(p => (
+              <div key={p} style={{background:'#fff', border:'1px solid #e7e5e4', borderRadius:6, padding:'10px 14px', flex:1, textAlign:'center'}}>
+                <div style={{fontSize:11, color:'#a8a29e'}}>{p} הוציא/ה החודש</div>
+                <div className="mono" style={{fontWeight:700, color:'#C1440E'}}>₪{fmt(spendByPerson[p] || 0)}</div>
+              </div>
+            ))}
+          </div>
+
+          <h2 style={{fontSize:13, fontWeight:600, color:'#78716c', marginBottom:8, textTransform:'uppercase', letterSpacing:0.5}}>הכנסות מול הוצאות, 6 חודשים אחרונים</h2>
+          <div style={{background:'#fff', border:'1px solid #e7e5e4', borderRadius:6, padding:12, marginBottom:20}}>
+            <canvas ref={monthlyChartRef} height="200"></canvas>
+          </div>
+
+          <h2 style={{fontSize:13, fontWeight:600, color:'#78716c', marginBottom:8, textTransform:'uppercase', letterSpacing:0.5}}>פילוח הוצאות לפי קטגוריה, {month.slice(5)}/{month.slice(0,4)}</h2>
+          <div style={{background:'#fff', border:'1px solid #e7e5e4', borderRadius:6, padding:12}}>
+            {Object.keys(spentByCategory).length === 0
+              ? <p style={{fontSize:14, color:'#a8a29e', textAlign:'center', padding:'16px 0'}}>אין הוצאות בחודש זה</p>
+              : <canvas ref={categoryChartRef} height="220"></canvas>}
           </div>
         </div>
       )}
